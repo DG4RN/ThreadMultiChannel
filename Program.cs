@@ -9,7 +9,9 @@ using System.Security.Policy;
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
 
-
+// ConsoleApp to receive and transmit data via 4 ports parallel. Used to distribute Pure Signal Feedback
+// to a Red Pitaya SDR including distribution of actual used frequency.
+// 12.07.2024 DG4RN
 
 namespace ConsoleApp_PS
 {
@@ -23,41 +25,30 @@ namespace ConsoleApp_PS
         static BlockingCollection<string> data_tx = new BlockingCollection<string>();
         static BlockingCollection<string> frequenz_pa = new BlockingCollection<string>();
 
-        static void Main(string[] args)
+        static void Main()
         {
-            char[] readbuffer_aduino = new char[12];
-            
-            char[] frequenz_als_char = new char[12];
-            char[] wechsel_format = new char[16];
-
-
-            
-
-            
-
-           
-
+                      
             // Open the serial ports
             port1.Open();
             port2.Open();
             port3.Open();
             port4.Open();
 
-            // Create two threads to handle data reception
-            Thread thread1 = new Thread(ReceiveData1);
-            Thread receivethread2 = new Thread(ReceiveData2);
-            Thread transmitthread2 = new Thread(TransmitData2);
-            
-            Thread thread3 = new Thread(() => TransmitData3(port3));
+            // Create  threads to handle data reception
+            Thread thread1 = new Thread(ReceiveData1);                         //Thetis Pure Signal Feedback
+            Thread receivethread2 = new Thread(ReceiveData2);                  // Receive Frequenz from Thetis via CAT interface
+            Thread transmitthread2 = new Thread(TransmitData2);                 // Request Frequenz from Thetis via CAT interface
+
+            Thread thread3 = new Thread(() => TransmitData3(port3));             // Tx Frequenz and PS feedback to com 22 to the Teensy Board at Red Pitaya 
             Thread receivethread4 = new Thread(ReceiveData4);
-            Thread transmitthread4 = new Thread(() => TransmitData4(port4));
+            Thread transmitthread4 = new Thread(() => TransmitData4());          // TX Frequenz and LDMOS PA in ICOM Format
 
 
             thread1.Start();
             receivethread2.Start();
             transmitthread2.Start();
             thread3.Start();
-            receivethread4.Start();
+            //receivethread4.Start();
             transmitthread4.Start();
 
 
@@ -76,51 +67,52 @@ namespace ConsoleApp_PS
                     data_tx.Add(data);
                     Console.WriteLine("Data from Port 1: " + data);
                 }
+                else
+                {
+                    Thread.Sleep(50);
+                }
             }
         }
 
-        static void TransmitData2()              // Aktuelle Frequenz von Thetis über CAT anfordern
+        static void TransmitData2()              // Request Frequenz from Thetis via CAT interface
         {
 
             char[] sendbuffer_sdr = new char[15];
 
             while (true)
             {
-                int i = 0;
+                
                 sendbuffer_sdr[0] = 'F';  // = F  0x46
                 sendbuffer_sdr[1] = 'A';  // = A  0x41
                 sendbuffer_sdr[2] = ';';  // =;   0x3b
-
-
-                
-
-                //printf("?? %s %d \n", &sendbuffer_sdr[i],i);
-                //char c_2_sdr = sendbuffer_sdr[i]; 
+      
                 port2.Write(sendbuffer_sdr, 0, 3);
-                // printf("%u %u Bytes were written\r",bytesWritten, strlen(sendbuffer_sdr));
-
-                Thread.Sleep(200);        // Pause 200 msec
+                
+                Thread.Sleep(100);        // Pause 100 msec
             }
         }
 
-            static void ReceiveData2()  // Aktuelle Frequenz von Thetis über CAT empfangen
+        static void ReceiveData2()  // Receive Frequenz from Thetis via CAT interface
         {
            
 
-            char[] readbuffer_sdr = new char[255];
+            char[] readbuffer_sdr = new char[55];
+            
             char[] frequenz_extract = new char[11];
-            char[] sendbuffer_aduino = new char[12];
+            
 
             Int64 frequenz_rc;
-            bool frequenz_received = false;
+            Int64 frequenz_rc_old = 0;
+
+            bool frequenz_received;
 
             while (true)
             {
-                int i = 0;
+                int i ;
                 
                 if (port2.BytesToRead > 0)
                 {
-                    int n = port2.ReadByte();
+                    //int n = port2.ReadByte();
                     //Console.WriteLine("                  Data rx:  " + n);
                     i = 0;
                     while (28 > i)
@@ -139,21 +131,24 @@ namespace ConsoleApp_PS
                             int o = i + 2;
                             Array.Copy(readbuffer_sdr, o, frequenz_extract, 0, 11);
                             string frequenz_rcd = new string(frequenz_extract);
-                            frequenz_pa.Add(frequenz_rcd);
-
+                                                        
                             frequenz_rc = long.Parse(frequenz_rcd);
+                            if(frequenz_rc != frequenz_rc_old)
+                            {
+                                frequenz_pa.Add(frequenz_rcd);
+                            }
 
                             if ((frequenz_rc > 0) && (frequenz_rc < 200000000))
                             {
                                 frequenz_received = true;
+                                frequenz_rc_old = frequenz_rc;
                             }
                             else
                             {
                                 frequenz_received = false;
                             }
-                            Console.WriteLine("Frequenz:  " + frequenz_rc);
-                            o = 0;
-                            i = 0;
+                          //  Console.WriteLine("Frequenz:  " + frequenz_rc);
+                           
                             if (frequenz_received)
                             {
                                 if (frequenz_rc < 10000000)
@@ -175,10 +170,11 @@ namespace ConsoleApp_PS
                     }
 
                 }
+                Thread.Sleep(100);        // Pause 100 msec
             }
         }
 
-           static void TransmitData3(SerialPort port)   // Tx Frequenz and PS feedback to com 22 to the Teensy Board 
+           static void TransmitData3(SerialPort port)   // Tx Frequenz and PS feedback to com 22 to the Teensy Board at Red Pitaya
            {
             while (true)
             {
@@ -186,13 +182,14 @@ namespace ConsoleApp_PS
                 if (data_tx.TryTake(out string dataToSend))
                 {
                     port.WriteLine(dataToSend);
-                    Console.WriteLine("                              Data sent: Port 3 " + dataToSend);
+                  //  Console.WriteLine("                              Data sent: Port 3 " + dataToSend);
                 }
-                
+
+                Thread.Sleep(50);        // Pause 50 msec
             }                
            }
 
-           static void ReceiveData4()
+           static void ReceiveData4()            // Receive data from PA in ICOM Format
             {
             char[] controlbuffer = new char[14];
             while (true)
@@ -208,29 +205,37 @@ namespace ConsoleApp_PS
                     i = 0;
                     if (0xfe == controlbuffer[i] && 0xfe == controlbuffer[i + 1] && 0xfd == controlbuffer[i + 5])
                     {
-                        Console.WriteLine("                                      Data from Port 4: rx" );
-                        port4.DiscardInBuffer();
+                        Console.WriteLine("                                      Data from Port 4: rx" + port4.BytesToRead);
+                      //  port4.DiscardInBuffer();
                     }
                 }
+                Thread.Sleep(100);        // Pause 100 msec
             }
 
         }
 
-           static void TransmitData4(SerialPort port)  // to com 12 in ICOM Format  for LDMOS PA (alle 700msec)
+           static void TransmitData4()  // transmit to com 12 in ICOM Format  for LDMOS PA (every 400msec)
             {
-                        
-             while (true)
+            byte[] bytes_old = new byte[10];
+
+            while (true)
               {
-                 if (frequenz_pa.TryTake(out string frequenzToSend))
-                 {
+                if (frequenz_pa.TryTake(out string frequenzToSend))
+                {
                     byte[] bytes = PaFrequenz(frequenzToSend);
 
                     port4.Write(bytes, 0, 10);
                     Console.WriteLine("                                                              Port4     Data: " + frequenzToSend);
-                    Thread.Sleep(400);
+                    //frequenz_pa = new BlockingCollection<string>();
+                    Array.Copy(bytes, bytes_old, bytes.Length);
+                    
                 }
-                 
-              }
+                else
+                {
+                    port4.Write(bytes_old, 0, 10);
+                }
+                Thread.Sleep(400);
+            }
 
              byte[] ConvertToBCD(int value)
              {
@@ -284,7 +289,7 @@ namespace ConsoleApp_PS
 
                 var SendBuffer = new byte[10];  //Icom format to return actual frequence
 
-
+                // transmit format for ICOM interface at LDMOS PA
                 SendBuffer[0] = 254;
                 SendBuffer[1] = 254;
                 SendBuffer[2] = 224;
